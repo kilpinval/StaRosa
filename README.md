@@ -1,0 +1,2 @@
+# StaRosa
+Solo archivo pesados
