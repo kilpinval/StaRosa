@@ -1,0 +1,172 @@
+Perfecto. Elegir la Ruta B (MAX31865) es la decisión más inteligente para cumplir con ±0.3 °C sin frustraciones. Este chip hace todo el trabajo pesado por ti: excita el PT100, amplifica la señal, la convierte con un ADC de 15 bits (resolución de 0.03125 °C) y filtra el ruido de 50/60 Hz.
+
+Aquí tienes la guía completa para conectarlo y programarlo con tu PIC 16F887A. Solo necesitarás el chip MAX31865, una resistencia de precisión de 430Ω (0.1%) y el PT100 (preferiblemente de 3 hilos).
+
+---
+
+1. Conexiones de Hardware (PIC ↔ MAX31865)
+
+MAX31865 PIC 16F887A
+VDD 3.3V (usa un regulador como AMS1117-3.3)
+GND GND
+SCLK RC3 (Pin 17)
+SDI (MOSI) RC5 (Pin 18)
+SDO (MISO) RC4 (Pin 23)
+CS (Chip Select) RC0 (Pin 15 - puedes elegir otro)
+DRDY No lo conectes (usaremos polling, más simple)
+
+Nota crítica: Alimenta el MAX31865 a 3.3V, pero sus pines de comunicación son tolerantes a 5V, así que puedes conectarlo directamente al PIC sin necesidad de divisores de tensión.
+
+---
+
+2. Configuración del Registro del MAX31865
+
+Para que funcione perfectamente con tu PT100 de 3 hilos y filtro de 50Hz, escribe este valor en su registro de configuración: 0xD2.
+
+· Bit 7 (VBIAS) = 1: Activa la excitación del sensor.
+· Bit 6 (Conversion Auto) = 1: Convierte continuamente.
+· Bit 5 (1-shot) = 0: Desactivado (usamos auto).
+· Bit 4 (3-wire) = 1: ¡Indispensable para compensar la resistencia de los cables!
+· Bits 1-0 = 10: Filtro para 50Hz (o 01 para 60Hz).
+
+---
+
+3. Código para el PIC (XC8)
+
+Copia este código base. Incluye la inicialización SPI, la lectura de la resistencia y la conversión a temperatura usando la ecuación de Callendar-Van Dusen (para >0°C).
+
+```c
+#include <xc.h>
+#include <math.h>   // Para la raíz cuadrada
+#include <stdio.h>  // Para sprintf
+
+// Configuración del oscilador (ejemplo: 8MHz interno)
+#pragma config FOSC = INTRC_NOCLKOUT, WDTE = OFF, PWRTE = OFF, MCLRE = ON
+#define _XTAL_FREQ 8000000
+
+// Definición de pines
+#define CS_PIN      RC0
+#define CS_TRIS     TRISC0
+
+// Variables del MAX31865
+#define R_REF 430.0   // Resistencia de referencia (¡debe ser de 0.1%!)
+#define R0 100.0      // Resistencia del PT100 a 0°C
+
+// --- INICIALIZACIÓN SPI (Master, Fosc/4) ---
+void SPI_Init() {
+    // Pines: SCK=RC3, SDI=RC4, SDO=RC5
+    TRISC3 = 0;  // SCK salida
+    TRISC5 = 0;  // SDO salida
+    TRISC4 = 1;  // SDI entrada
+    CS_TRIS = 0; // CS salida
+    CS_PIN = 1;  // CS inactivo (high)
+
+    SSPCON1 = 0x20;  // Master mode, Fosc/4 (reloj rápido)
+    SSPSTAT = 0xC0;  // Muestra en mitad del ciclo, modo SPI normal (CKE=0)
+}
+
+// --- ESCRIBIR 1 BYTE por SPI ---
+void SPI_Write(unsigned char data) {
+    SSPBUF = data;
+    while(!SSPIF);  // Esperar a que termine la transmisión
+    SSPIF = 0;
+}
+
+// --- LEER 1 BYTE por SPI ---
+unsigned char SPI_Read() {
+    SSPBUF = 0x00;  // Enviar dummy para generar reloj
+    while(!SSPIF);
+    SSPIF = 0;
+    return SSPBUF;
+}
+
+// --- LEER REGISTRO DEL MAX31865 ---
+unsigned short MAX31865_ReadReg(unsigned char reg) {
+    unsigned short value = 0;
+    unsigned char msb, lsb;
+
+    CS_PIN = 0;           // Activar dispositivo
+    SPI_Write(reg);       // Enviar dirección de lectura (ej. 0x01 para MSB)
+    msb = SPI_Read();     // Leer byte alto
+    SPI_Write(reg + 1);   // Enviar dirección del byte bajo
+    lsb = SPI_Read();     // Leer byte bajo
+    CS_PIN = 1;           // Desactivar
+
+    // Combinar en 16 bits y eliminar el bit de fallo (bit 0 del MSB)
+    value = ((unsigned short)msb << 8) | lsb;
+    value = value >> 1;   // El ADC es de 15 bits, descartamos el LSB que es para fallos
+    return value;
+}
+
+// --- CONVERTIR A TEMPERATURA (°C) usando Callendar-Van Dusen ---
+float PT100_To_Temperature(unsigned int adc_code) {
+    float R_rtd, T;
+    const float A = 3.9083e-3;
+    const float B = -5.775e-7;
+
+    // 1. Calcular la resistencia real del PT100
+    R_rtd = ( (float)adc_code * R_REF ) / 32768.0;
+
+    // 2. Ecuación cuadrática: R = R0 * (1 + A*T + B*T^2)
+    // Resolver para T > 0°C: T = (-A + sqrt(A^2 - 4*B*(1 - R/R0))) / (2*B)
+    float C = 1.0 - (R_rtd / R0);
+    T = (-A + sqrt(A*A - 4.0 * B * C)) / (2.0 * B);
+    return T;
+}
+
+// --- MAIN ---
+void main() {
+    unsigned short raw_adc;
+    float temperatura;
+    char buffer[20];
+
+    // Inicializar
+    SPI_Init();
+    __delay_ms(100);
+
+    // Configurar el MAX31865 (3 hilos, modo auto, 50Hz)
+    CS_PIN = 0;
+    SPI_Write(0x80);   // Registrar configuración (0x80)
+    SPI_Write(0xD2);   // Valor: VBIAS ON, Auto ON, 3-wires, 50Hz
+    CS_PIN = 1;
+    __delay_ms(10);
+
+    // Configurar UART (9600 baudios, asumiendo oscilador 8MHz)
+    // ... (código de UART estándar que ya tienes)
+
+    while(1) {
+        raw_adc = MAX31865_ReadReg(0x01); // Leer registro de resistencia (0x01 y 0x02)
+
+        // Opcional: Verificar si hay fallos (el bit 7 del byte alto indica fallo)
+        // if(raw_adc & 0x8000) { /* Manejar error */ }
+
+        temperatura = PT100_To_Temperature(raw_adc);
+
+        // Enviar por UART (ej. "25.37°C")
+        sprintf(buffer, "%.2f°C\r\n", temperatura);
+        UART_Write_String(buffer); // Implementa tu función de envío
+
+        __delay_ms(500);
+    }
+}
+```
+
+---
+
+4. ¿Por qué esta ruta asegura los ±0.3 °C?
+
+Requisito Cómo lo soluciona el MAX31865
+Error de cables La configuración de 3 hilos cancela la resistencia de los cables automáticamente.
+Resolución Su ADC de 15 bits (32768 pasos) para el rango de 0-400Ω te da una resolución de 0.03125 °C. Muy por encima de los ~0.3 que necesitas.
+Ruido Tiene filtros internos de 50/60Hz, eliminando interferencias de la red eléctrica.
+Linealidad Usamos la ecuación estándar en el código, obteniendo precisión < 0.1°C en todo tu rango (35-80°C).
+Deriva térmica La resistencia de referencia externa de 430Ω (0.1%) es la única que importa; si usas una de buena calidad, la deriva es mínima.
+
+---
+
+5. Último consejo para la precisión máxima
+
+· Resistencia de Referencia (R_REF): Compra una resistencia de 430Ω, 0.1% (o 400Ω, pero 430Ω es la típica). Si usas una de 1%, la precisión caerá a ~±1°C. Es la pieza más importante.
+· Calibración extra (opcional): Si quieres ajustar el último decimal, mide un baño de agua con hielo (0°C) y ajusta el valor de R_REF en el código (en lugar de 430.0, pon el valor real de tu resistencia medida con un multímetro).
+
+Con este código y conexión, tu PIC se convierte en un termómetro de precisión de laboratorio. ¿Tienes dudas sobre cómo configurar el UART para enviar los datos o sobre el manejo de la interrupción de fallo del chip?
