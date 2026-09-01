@@ -1,0 +1,83 @@
+¡Excelente pregunta! No, ese no es el límite, y C tiene varias alternativas y extensiones. Aquí tienes la lista completa:
+
+1. Estándar ANSI/ISO C (válidas en todo C)
+
+```c
+// La clásica (con parámetros)
+int main(int argc, char *argv[])
+
+// Equivalente (notación de puntero)
+int main(int argc, char **argv)
+
+// Sin parámetros (cuando no usas argumentos)
+int main(void)
+```
+
+2. Parámetros ambientales (muy útil)
+
+```c
+// Tercer parámetro: entorno del sistema
+int main(int argc, char *argv[], char *envp[])
+```
+
+· envp[] es un arreglo de strings con variables de entorno (PATH, HOME, etc.)
+· Termina en NULL. Ej: "PATH=/usr/bin", "USER=john"
+
+3. Extensiones de Unix/Linux (glibc)
+
+```c
+// Cuarto parámetro (extensión GNU)
+int main(int argc, char *argv[], char *envp[], char *apple[])
+```
+
+· apple[] es información específica de ejecución (ruta del binario, etc.)
+
+4. Para sistemas embebidos/RTOS
+
+```c
+// Sin retorno (nunca termina)
+void main(void)
+
+// Con parámetros personalizados
+void main(int arg1, int arg2, char *arg3)
+```
+
+5. En Windows (extensión de Microsoft)
+
+```c
+// Usa Unicode (wchar_t)
+int wmain(int argc, wchar_t *argv[], wchar_t *envp[])
+
+// Punto de entrada alternativo
+int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmdLine, int nShow)
+```
+
+6. Lo más "poderoso" que existe
+
+```c
+// ¡Sí, puedes tener más parámetros! (pero no es estándar)
+int main(int argc, char *argv[], char *envp[], char *apple[], 
+         void *auxvec, ...)  // ¡con elipsis!
+```
+
+¿Por qué C es tan flexible?
+
+· El linker puede definir cualquier símbolo como punto de entrada (_start por defecto)
+· Puedes crear tu propio crt0 (runtime de C) y llamar a main() con los parámetros que quieras
+· El estándar solo exige que exista main con 0 o 2 parámetros, pero no prohíbe extras
+
+Consejo práctico
+
+Para 99% de los casos usa:
+
+```c
+int main(int argc, char **argv)  // Prefiero ** por claridad
+```
+
+Pero si necesitas variables de entorno, esta es la mejor:
+
+```c
+int main(int argc, char **argv, char **envp)
+```
+
+¿Quieres que profundice en cómo usar envp o cómo crear tu propio punto de entrada personalizado?
